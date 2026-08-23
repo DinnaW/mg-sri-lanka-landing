@@ -21,6 +21,8 @@ const props = defineProps({
 const asset = (path) =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
 
+const homeHref = import.meta.env.BASE_URL;
+
 const activeMega = ref(null);
 const activeCategory = ref("all");
 const mobileOpen = ref(false);
@@ -202,7 +204,7 @@ onBeforeUnmount(() => {
     <!-- DESKTOP / MAIN BAR -->
     <div class="mg-header__bar">
       <div class="mg-header__inner">
-        <a href="/" class="mg-header__brand" aria-label="MG home">
+        <a :href="homeHref" class="mg-header__brand" aria-label="MG home">
           <svg
             class="mg-header__brand-mark"
             viewBox="0 0 64 52"

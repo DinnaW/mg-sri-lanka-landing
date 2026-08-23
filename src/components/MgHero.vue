@@ -1,6 +1,5 @@
 <script setup>
 import { ref } from "vue";
-import MgHeader from "./MgHeader.vue";
 
 const asset = (path) =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
@@ -19,7 +18,7 @@ const hero = {
   vehicleImage: asset("images/345.png"),
 
   modelLink: "#mg-range",
-  testDriveLink: "#test-drive",
+  testDriveLink: "#showroom",
 };
 
 /* =========================================================
@@ -55,12 +54,6 @@ const youtubeUrl =
 
 <template>
   <section class="mg-hero">
-    <!-- REUSABLE MODERN HEADER + VEHICLE MEGA MENU -->
-    <MgHeader
-      :test-drive-link="hero.testDriveLink"
-      dealer-link="#showroom"
-    />
-
     <!-- YOUTUBE BACKGROUND -->
     <div
       class="mg-hero__video"

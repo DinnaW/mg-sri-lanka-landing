@@ -1,6 +1,9 @@
 <script setup>
 import { ref } from "vue";
 
+const asset = (path) =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+
 
 /* =========================================================
    ACTIVE SPEC
@@ -15,7 +18,7 @@ const activeSpec = ref(null);
    Existing MG transparent vehicle image.
 ========================================================= */
 
-const carImage = "/images/123.png";
+const carImage = asset("images/123.png");
 
 
 /* =========================================================

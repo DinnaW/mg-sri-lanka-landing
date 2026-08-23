@@ -6,6 +6,9 @@ import {
   ref,
 } from "vue";
 
+const asset = (path) =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+
 
 /* =========================================================
    VEHICLE DATA
@@ -44,7 +47,7 @@ const vehicles = [
     /* BODY */
 
     image:
-      "/images/123.png",
+      asset("images/123.png"),
 
 
     /* =====================================================
@@ -55,10 +58,10 @@ const vehicles = [
     ====================================================== */
 
     frontWheel:
-      "/images/black.png",
+      asset("images/black.png"),
 
     rearWheel:
-      "/images/black.png",
+      asset("images/black.png"),
 
 
     link:
@@ -179,16 +182,16 @@ const vehicles = [
     /* CHANGE IMAGE HERE */
 
     image:
-      "/images/234.png",
+      asset("images/234.png"),
 
 
     /* CHANGE WHEELS HERE */
 
     frontWheel:
-      "/images/orange.png",
+      asset("images/orange.png"),
 
     rearWheel:
-      "/images/orange.png",
+      asset("images/orange.png"),
 
 
     link:
@@ -312,14 +315,14 @@ const vehicles = [
 
 
     image:
-      "/images/345.png",
+      asset("images/345.png"),
 
 
     frontWheel:
-      "/images/blue.png",
+      asset("images/blue.png"),
 
     rearWheel:
-      "/images/blue.png",
+      asset("images/blue.png"),
 
 
     link:
@@ -429,14 +432,14 @@ const vehicles = [
 
 
     image:
-      "/images/567.png",
+      asset("images/567.png"),
 
 
     frontWheel:
-      "/images/white.png",
+      asset("images/white.png"),
 
     rearWheel:
-      "/images/white.png",
+      asset("images/white.png"),
 
 
     link:
@@ -546,14 +549,14 @@ const vehicles = [
 
 
     image:
-      "/images/456.png",
+      asset("images/456.png"),
 
 
     frontWheel:
-      "/images/green.png",
+      asset("images/green.png"),
 
     rearWheel:
-      "/images/green.png",
+      asset("images/green.png"),
 
 
     link:

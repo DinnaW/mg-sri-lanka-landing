@@ -1,3 +1,10 @@
+<script setup>
+const asset = (path) =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+
+const bannerImage = asset("images/mg-mountain-banner.png");
+</script>
+
 <template>
   <section class="mg-cinematic-banner">
 
@@ -7,7 +14,7 @@
 
     <img
       class="mg-cinematic-banner__image"
-      src="/images/mg-mountain-banner.png"
+      :src="bannerImage"
       alt="MG vehicle overlooking a dramatic mountain road"
       loading="lazy"
       decoding="async"

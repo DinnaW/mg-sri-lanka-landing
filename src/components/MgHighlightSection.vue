@@ -1,6 +1,9 @@
 <script setup>
 import { ref, computed } from "vue";
-const carImage = "/images/mg-cyberster-cutout.png";
+
+const asset = (path) =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+const carImage = asset("images/mg-cyberster-cutout.png");
 const vehicleColors = [
   {
     id: "red",

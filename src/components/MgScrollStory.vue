@@ -6,13 +6,16 @@ import {
   ref,
 } from "vue";
 
+const asset = (path) =>
+  `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
+
 
 /* =========================================================
    VIDEO
 ========================================================= */
 
 const videoSrc =
-  "/videos/mg-scroll-story.mp4";
+  asset("videos/mg-scroll-story.mp4");
 
 
 /*
