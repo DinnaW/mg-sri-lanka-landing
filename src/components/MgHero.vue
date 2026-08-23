@@ -1,154 +1,569 @@
 <script setup>
-import { ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+} from "vue";
 
 const asset = (path) =>
   `${import.meta.env.BASE_URL}${path.replace(/^\/+/, "")}`;
 
 /* =========================================================
-   HERO DATA
+   HERO SLIDES
+   You only need to change the youtubeId / copy here later.
 ========================================================= */
 
-const hero = {
-  label: "100% Electric",
-  model: "MG S5 EV",
-  tagline: "The EV that makes sense.",
-  youtubeId: "ABUkN22N0F4",
+const slides = [
+  {
+    id: "s5-ev",
+    eyebrow: "100% Electric",
+    model: "MG S5 EV",
+    tagline: "The EV that makes sense.",
+    youtubeId: "ABUkN22N0F4",
+    vehicleImage: asset("images/345.png"),
+    modelLink: "#mg-range",
+    testDriveLink: "#showroom",
+  },
+  {
+    id: "mg4-electric",
+    eyebrow: "100% Electric",
+    model: "MG4 Electric",
+    tagline: "Electric energy with a different attitude.",
+    youtubeId: "K8EcIct77xY",
+    vehicleImage: asset("images/234.png"),
+    modelLink: "#mg-range",
+    testDriveLink: "#showroom",
+  },
+  {
+    id: "zs-ev",
+    eyebrow: "100% Electric",
+    model: "MG ZS EV",
+    tagline: "Electric freedom made for everyday life.",
+    youtubeId: "md1ZJLCxK6E",
+    vehicleImage: asset("images/123.png"),
+    modelLink: "#mg-range",
+    testDriveLink: "#showroom",
+  },
+  {
+    id: "hs",
+    eyebrow: "Performance SUV",
+    model: "MG HS",
+    tagline: "Confident performance. Refined for every journey.",
+    youtubeId: "Q3wGHI8ncG4",
+    vehicleImage: asset("images/567.png"),
+    modelLink: "#mg-range",
+    testDriveLink: "#showroom",
+  },
+];
 
-  /* Uses the real local MG cutout already in your project. */
-  vehicleImage: asset("images/345.png"),
+/* =========================================================
+   SLIDER SETTINGS
+========================================================= */
 
-  modelLink: "#mg-range",
-  testDriveLink: "#showroom",
+const AUTO_DURATION = 10000;
+const VIDEO_REVEAL_DELAY = 450;
+const CROSSFADE_DURATION = 900;
+const VIDEO_FALLBACK_DELAY = 2600;
+
+/* =========================================================
+   STATE
+========================================================= */
+
+const activeIndex = ref(0);
+const previousIndex = ref(null);
+const isSwitching = ref(false);
+const isPaused = ref(false);
+
+/*
+  Important:
+  Each iframe receives its own loaded state.
+  We DO NOT preload all four hidden iframes.
+  Only the active + outgoing iframe are mounted.
+*/
+const videoReady = reactive(
+  Object.fromEntries(
+    slides.map((_, index) => [index, false])
+  )
+);
+
+const mountVersion = reactive(
+  Object.fromEntries(
+    slides.map((_, index) => [index, 0])
+  )
+);
+
+let autoTimer = null;
+let transitionTimer = null;
+let fallbackTimer = null;
+
+const revealTimers = new Map();
+
+/* =========================================================
+   COMPUTED
+========================================================= */
+
+const activeSlide = computed(
+  () => slides[activeIndex.value]
+);
+
+const currentNumber = computed(
+  () => String(activeIndex.value + 1).padStart(2, "0")
+);
+
+const totalNumber = String(slides.length).padStart(2, "0");
+
+/* =========================================================
+   YOUTUBE
+========================================================= */
+
+const youtubeUrl = (slide) => {
+  const origin =
+    typeof window !== "undefined"
+      ? `&origin=${encodeURIComponent(window.location.origin)}`
+      : "";
+
+  return (
+    `https://www.youtube.com/embed/${slide.youtubeId}` +
+    `?autoplay=1` +
+    `&mute=1` +
+    `&controls=0` +
+    `&loop=1` +
+    `&playlist=${slide.youtubeId}` +
+    `&rel=0` +
+    `&playsinline=1` +
+    `&disablekb=1` +
+    `&fs=0` +
+    `&iv_load_policy=3` +
+    `&modestbranding=1` +
+    `&enablejsapi=1` +
+    origin
+  );
 };
 
 /* =========================================================
-   YOUTUBE LOADING STATE
+   RENDER HELPERS
 ========================================================= */
 
-const videoVisible = ref(false);
+const shouldRenderVideo = (index) =>
+  index === activeIndex.value ||
+  index === previousIndex.value;
 
-const handleVideoLoad = () => {
-  window.setTimeout(() => {
-    videoVisible.value = true;
-  }, 1400);
+const videoKey = (index) =>
+  `${slides[index].id}-${mountVersion[index]}`;
+
+/* =========================================================
+   TIMERS
+========================================================= */
+
+const clearAutoTimer = () => {
+  if (autoTimer) {
+    window.clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+};
+
+const clearTransitionTimer = () => {
+  if (transitionTimer) {
+    window.clearTimeout(transitionTimer);
+    transitionTimer = null;
+  }
+};
+
+const clearFallbackTimer = () => {
+  if (fallbackTimer) {
+    window.clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  }
+};
+
+const clearRevealTimer = (index) => {
+  const timer = revealTimers.get(index);
+
+  if (timer) {
+    window.clearTimeout(timer);
+    revealTimers.delete(index);
+  }
 };
 
 /* =========================================================
-   YOUTUBE BACKGROUND URL
+   AUTOPLAY
 ========================================================= */
 
-const youtubeUrl =
-  `https://www.youtube.com/embed/${hero.youtubeId}` +
-  `?autoplay=1` +
-  `&mute=1` +
-  `&controls=0` +
-  `&loop=1` +
-  `&playlist=${hero.youtubeId}` +
-  `&rel=0` +
-  `&playsinline=1` +
-  `&disablekb=1` +
-  `&fs=0` +
-  `&iv_load_policy=3` +
-  `&autohide=1`;
+const scheduleAutoAdvance = () => {
+  clearAutoTimer();
+
+  if (isPaused.value) {
+    return;
+  }
+
+  autoTimer = window.setTimeout(() => {
+    const next =
+      (activeIndex.value + 1) %
+      slides.length;
+
+    goToSlide(next, true);
+  }, AUTO_DURATION);
+};
+
+/* =========================================================
+   FINISH TRANSITION
+========================================================= */
+
+const finishTransition = (index) => {
+  /*
+    Ignore a late load event from an iframe that is no
+    longer the active slide.
+  */
+  if (index !== activeIndex.value) {
+    return;
+  }
+
+  clearFallbackTimer();
+  clearTransitionTimer();
+
+  /*
+    Let Vue paint the new iframe at opacity:1 first,
+    then remove the outgoing iframe after the CSS fade.
+  */
+  transitionTimer = window.setTimeout(() => {
+    previousIndex.value = null;
+    isSwitching.value = false;
+  }, CROSSFADE_DURATION);
+};
+
+/* =========================================================
+   IFRAME LOAD
+========================================================= */
+
+const handleVideoLoad = (index) => {
+  clearRevealTimer(index);
+
+  const timer = window.setTimeout(async () => {
+    /*
+      If the iframe became an outgoing slide before its
+      delayed load callback ran, do nothing.
+    */
+    if (index !== activeIndex.value) {
+      return;
+    }
+
+    videoReady[index] = true;
+
+    await nextTick();
+
+    finishTransition(index);
+
+    revealTimers.delete(index);
+  }, VIDEO_REVEAL_DELAY);
+
+  revealTimers.set(index, timer);
+};
+
+/* =========================================================
+   FALLBACK
+
+   An embed can occasionally take longer to fire @load.
+   Never leave navigation permanently locked.
+========================================================= */
+
+const createVideoFallback = (index) => {
+  clearFallbackTimer();
+
+  fallbackTimer = window.setTimeout(async () => {
+    if (index !== activeIndex.value) {
+      return;
+    }
+
+    videoReady[index] = true;
+
+    await nextTick();
+
+    finishTransition(index);
+  }, VIDEO_FALLBACK_DELAY);
+};
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
+
+const goToSlide = async (index, fromAuto = false) => {
+  if (
+    index < 0 ||
+    index >= slides.length ||
+    index === activeIndex.value
+  ) {
+    if (!fromAuto) {
+      scheduleAutoAdvance();
+    }
+
+    return;
+  }
+
+  /*
+    Do not permanently block navigation.
+    A fast user click during a crossfade simply starts
+    the newest requested transition.
+  */
+  clearAutoTimer();
+  clearTransitionTimer();
+  clearFallbackTimer();
+
+  const outgoingIndex = activeIndex.value;
+
+  previousIndex.value = outgoingIndex;
+  activeIndex.value = index;
+  isSwitching.value = true;
+
+  /*
+    The target iframe is mounted fresh every time.
+    This is the key fix for the previous implementation.
+  */
+  videoReady[index] = false;
+  mountVersion[index] += 1;
+
+  await nextTick();
+
+  createVideoFallback(index);
+  scheduleAutoAdvance();
+};
+
+const nextSlide = () => {
+  const next =
+    (activeIndex.value + 1) %
+    slides.length;
+
+  goToSlide(next);
+};
+
+const previousSlide = () => {
+  const previous =
+    (activeIndex.value - 1 + slides.length) %
+    slides.length;
+
+  goToSlide(previous);
+};
+
+/* =========================================================
+   PAGE VISIBILITY
+========================================================= */
+
+const handleVisibilityChange = () => {
+  isPaused.value = document.hidden;
+
+  if (document.hidden) {
+    clearAutoTimer();
+  } else {
+    scheduleAutoAdvance();
+  }
+};
+
+/* =========================================================
+   KEYBOARD
+========================================================= */
+
+const handleKeydown = (event) => {
+  if (event.key === "ArrowRight") {
+    nextSlide();
+  }
+
+  if (event.key === "ArrowLeft") {
+    previousSlide();
+  }
+};
+
+/* =========================================================
+   INITIAL LOAD
+========================================================= */
+
+onMounted(() => {
+  /*
+    First iframe is already mounted by the template.
+    Fallback guarantees the cover cannot stay forever.
+  */
+  createVideoFallback(0);
+  scheduleAutoAdvance();
+
+  document.addEventListener(
+    "visibilitychange",
+    handleVisibilityChange
+  );
+
+  window.addEventListener(
+    "keydown",
+    handleKeydown
+  );
+});
+
+onBeforeUnmount(() => {
+  clearAutoTimer();
+  clearTransitionTimer();
+  clearFallbackTimer();
+
+  revealTimers.forEach((timer) => {
+    window.clearTimeout(timer);
+  });
+
+  revealTimers.clear();
+
+  document.removeEventListener(
+    "visibilitychange",
+    handleVisibilityChange
+  );
+
+  window.removeEventListener(
+    "keydown",
+    handleKeydown
+  );
+});
 </script>
 
 <template>
   <section class="mg-hero">
-    <!-- YOUTUBE BACKGROUND -->
-    <div
-      class="mg-hero__video"
-      :class="{
-        'mg-hero__video--visible': videoVisible,
-      }"
-    >
-      <div class="mg-hero__video-cover"></div>
+    <!-- =====================================================
+         VIDEO LAYERS
+    ====================================================== -->
+    <div class="mg-hero__videos">
+      <template
+        v-for="(slide, index) in slides"
+        :key="slide.id"
+      >
+        <div
+          v-if="shouldRenderVideo(index)"
+          :key="videoKey(index)"
+          class="mg-hero__video"
+          :class="{
+            'is-active':
+              index === activeIndex &&
+              videoReady[index],
+            'is-previous':
+              index === previousIndex,
+          }"
+        >
+          <iframe
+            :src="youtubeUrl(slide)"
+            :title="`${slide.model} cinematic background`"
+            frameborder="0"
+            allow="autoplay; encrypted-media; picture-in-picture"
+            referrerpolicy="strict-origin-when-cross-origin"
+            tabindex="-1"
+            @load="handleVideoLoad(index)"
+          ></iframe>
+        </div>
+      </template>
 
-      <iframe
-        :src="youtubeUrl"
-        :title="`${hero.model} background video`"
-        frameborder="0"
-        allow="autoplay; encrypted-media"
-        tabindex="-1"
-        @load="handleVideoLoad"
-      ></iframe>
+      <!-- Only covers the very first video startup -->
+      <div
+        class="mg-hero__startup-cover"
+        :class="{
+          'is-hidden': videoReady[0],
+        }"
+      ></div>
     </div>
 
-    <!-- VIDEO OVERLAYS -->
+    <!-- =====================================================
+         CINEMATIC OVERLAYS
+    ====================================================== -->
     <div class="mg-hero__overlay"></div>
+    <div class="mg-hero__side-shade"></div>
     <div class="mg-hero__bottom-shade"></div>
 
-    <!-- HERO CONTENT -->
+    <!-- =====================================================
+         CONTENT
+    ====================================================== -->
     <div class="mg-hero__container">
-      <div class="mg-hero__intro">
-        <span class="mg-hero__label">
-          {{ hero.label }}
-        </span>
+      <!-- COPY -->
+      <Transition
+        name="hero-copy"
+        mode="out-in"
+      >
+        <div
+          :key="activeSlide.id"
+          class="mg-hero__intro"
+        >
+          <span class="mg-hero__label">
+            {{ activeSlide.eyebrow }}
+          </span>
 
-        <h1 class="mg-hero__title">
-          {{ hero.model }}
-        </h1>
+          <h1 class="mg-hero__title">
+            {{ activeSlide.model }}
+          </h1>
 
-        <p class="mg-hero__tagline">
-          {{ hero.tagline }}
-        </p>
-      </div>
+          <p class="mg-hero__tagline">
+            {{ activeSlide.tagline }}
+          </p>
+        </div>
+      </Transition>
 
-      <!-- LOWER-RIGHT CURRENT MODEL CARD -->
-      <div class="vehicle-card">
-        <a :href="hero.modelLink" class="vehicle-card__image">
-          <div class="vehicle-card__vehicle-bg"></div>
+      <!-- ===================================================
+           BOTTOM SLIDER CONTROL
+      ==================================================== -->
+      <div class="mg-hero__slider-nav">
+        <div class="mg-hero__counter">
+          <strong>{{ currentNumber }}</strong>
+          <span>/</span>
+          <small>{{ totalNumber }}</small>
+        </div>
 
-          <img :src="hero.vehicleImage" :alt="hero.model" />
-
-          <div class="vehicle-card__image-shade"></div>
-
-          <div class="vehicle-card__meta">
-            <span>Featured model</span>
-            <strong>{{ hero.model }}</strong>
-          </div>
-        </a>
-
-        <div class="vehicle-card__bottom">
-          <a :href="hero.testDriveLink" class="vehicle-card__testdrive">
-            <span class="vehicle-card__icon">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle
-                  cx="12"
-                  cy="12"
-                  r="8"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                />
-
-                <circle
-                  cx="12"
-                  cy="12"
-                  r="2"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                />
-
-                <path
-                  d="M4.6 10.5h14.8M12 14v6"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                />
-              </svg>
+        <div class="mg-hero__tabs">
+          <button
+            v-for="(slide, index) in slides"
+            :key="`${slide.id}-navigation`"
+            type="button"
+            class="mg-hero__tab"
+            :class="{
+              'is-active': index === activeIndex,
+            }"
+            :aria-current="
+              index === activeIndex
+                ? 'true'
+                : undefined
+            "
+            :aria-label="`Show ${slide.model}`"
+            @click.stop="goToSlide(index)"
+          >
+            <span class="mg-hero__tab-line">
+              <i></i>
             </span>
 
-            <span>Test Drive</span>
-          </a>
+            <span class="mg-hero__tab-copy">
+              {{ slide.model }}
+            </span>
+          </button>
+        </div>
 
-          <a
-            :href="hero.modelLink"
-            class="vehicle-card__arrow"
-            :aria-label="`Explore ${hero.model}`"
+        <div class="mg-hero__arrows">
+          <button
+            type="button"
+            aria-label="Previous vehicle"
+            @click.stop="previousSlide"
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                d="M19 12H5M10 7l-5 5 5 5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            aria-label="Next vehicle"
+            @click.stop="nextSlide"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
               <path
                 d="M5 12h14M14 7l5 5-5 5"
                 fill="none"
@@ -158,15 +573,118 @@ const youtubeUrl =
                 stroke-linejoin="round"
               />
             </svg>
-          </a>
+          </button>
         </div>
       </div>
+
+      <!-- ===================================================
+           ACTIVE VEHICLE CARD
+      ==================================================== -->
+      <Transition
+        name="vehicle-card-swap"
+        mode="out-in"
+      >
+        <div
+          :key="activeSlide.id"
+          class="vehicle-card"
+        >
+          <a
+            :href="activeSlide.modelLink"
+            class="vehicle-card__image"
+          >
+            <div class="vehicle-card__vehicle-bg"></div>
+
+            <img
+              :src="activeSlide.vehicleImage"
+              :alt="activeSlide.model"
+            />
+
+            <div class="vehicle-card__image-shade"></div>
+
+            <div class="vehicle-card__meta">
+              <span>Featured model</span>
+
+              <strong>
+                {{ activeSlide.model }}
+              </strong>
+            </div>
+          </a>
+
+          <div class="vehicle-card__bottom">
+            <a
+              :href="activeSlide.testDriveLink"
+              class="vehicle-card__testdrive"
+            >
+              <span class="vehicle-card__icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="8"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                  />
+
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="2"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                  />
+
+                  <path
+                    d="M4.6 10.5h14.8M12 14v6"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </span>
+
+              <span>Test Drive</span>
+            </a>
+
+            <a
+              :href="activeSlide.modelLink"
+              class="vehicle-card__arrow"
+              :aria-label="`Explore ${activeSlide.model}`"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  d="M5 12h14M14 7l5 5-5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </a>
+          </div>
+        </div>
+      </Transition>
     </div>
   </section>
 </template>
 
 <style scoped>
-@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Manrope:wght@400;500;600;700&display=swap");
+@import url(
+  "https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=Manrope:wght@400;500;600;700&display=swap"
+);
+
+/* =========================================================
+   HERO
+========================================================= */
 
 .mg-hero {
   --mg-red: #e51920;
@@ -182,103 +700,181 @@ const youtubeUrl =
   font-family: "Manrope", sans-serif;
 }
 
-/* VIDEO */
+/* =========================================================
+   VIDEO
+========================================================= */
 
-.mg-hero__video {
+.mg-hero__videos {
   position: absolute;
   inset: 0;
-  z-index: -5;
+  z-index: -6;
   overflow: hidden;
   background: #000;
 }
 
-.mg-hero__video-cover {
+.mg-hero__video {
   position: absolute;
   inset: 0;
-  z-index: 5;
-  pointer-events: none;
-  background: #000;
-  opacity: 1;
-  transition: opacity .75s cubic-bezier(.16, 1, .3, 1);
+  z-index: 1;
+  opacity: 0;
+  overflow: hidden;
+  transform: scale(1.025);
+  transition:
+    opacity .9s cubic-bezier(.22, 1, .36, 1),
+    transform 1.5s cubic-bezier(.22, 1, .36, 1);
 }
 
-.mg-hero__video--visible .mg-hero__video-cover {
-  opacity: 0;
+.mg-hero__video.is-previous {
+  z-index: 1;
+  opacity: 1;
+  transform: scale(1);
+}
+
+.mg-hero__video.is-active {
+  z-index: 2;
+  opacity: 1;
+  transform: scale(1);
 }
 
 .mg-hero__video iframe {
   position: absolute;
   top: 50%;
   left: 50%;
+
   width: 100vw;
   height: 56.25vw;
+
   min-width: 177.78vh;
   min-height: 100vh;
-  transform: translate(-50%, -50%);
+
+  transform:
+    translate(-50%, -50%)
+    scale(1.018);
+
+  border: 0;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity .75s ease;
 }
 
-.mg-hero__video--visible iframe {
-  opacity: 1;
-}
+/*
+  Startup cover is ONLY for the first page load.
+  During later transitions, the outgoing video remains
+  visible until the incoming iframe is ready.
+*/
 
-/* HERO IMAGE TREATMENT */
-
-.mg-hero__overlay {
+.mg-hero__startup-cover {
   position: absolute;
   inset: 0;
-  z-index: -4;
+  z-index: 10;
+  background: #000;
+  opacity: 1;
+  pointer-events: none;
+  transition:
+    opacity .75s cubic-bezier(.16, 1, .3, 1),
+    visibility .75s ease;
+}
+
+.mg-hero__startup-cover.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* =========================================================
+   OVERLAYS
+
+   pointer-events:none is important:
+   these layers can NEVER block slider navigation.
+========================================================= */
+
+.mg-hero__overlay,
+.mg-hero__side-shade,
+.mg-hero__bottom-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mg-hero__overlay {
+  z-index: -5;
+
   background:
     linear-gradient(
       180deg,
-      rgba(0, 0, 0, .26) 0%,
-      rgba(0, 0, 0, .025) 30%,
-      rgba(0, 0, 0, .015) 65%,
-      rgba(0, 0, 0, .17) 100%
+      rgba(0, 0, 0, .30) 0%,
+      rgba(0, 0, 0, .04) 28%,
+      rgba(0, 0, 0, .015) 58%,
+      rgba(0, 0, 0, .18) 100%
+    );
+}
+
+.mg-hero__side-shade {
+  z-index: -4;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(0, 0, 0, .15) 0%,
+      transparent 25%,
+      transparent 73%,
+      rgba(0, 0, 0, .08) 100%
     );
 }
 
 .mg-hero__bottom-shade {
-  position: absolute;
-  inset: 0;
   z-index: -3;
+
   background:
     linear-gradient(
       0deg,
-      rgba(0, 0, 0, .48) 0%,
-      rgba(0, 0, 0, .1) 28%,
-      transparent 52%
+      rgba(0, 0, 0, .62) 0%,
+      rgba(0, 0, 0, .18) 23%,
+      transparent 50%
     );
 }
 
-/* MAIN CONTAINER */
+/* =========================================================
+   CONTAINER
+========================================================= */
 
 .mg-hero__container {
   position: relative;
+  z-index: 10;
   width: 92vw;
   height: 100%;
   margin: 0 auto;
+  pointer-events: none;
 }
 
-/* INTRO */
+/*
+  Individual interactive elements opt back into
+  pointer events. This prevents invisible hero layers
+  from swallowing clicks.
+*/
+
+.mg-hero__slider-nav,
+.vehicle-card,
+.vehicle-card a {
+  pointer-events: auto;
+}
+
+/* =========================================================
+   INTRO
+========================================================= */
 
 .mg-hero__intro {
   position: absolute;
   top: 7.2vw;
   left: 50%;
-  width: 48vw;
+  width: 52vw;
   transform: translateX(-50%);
   text-align: center;
-  animation: heroIntro 1s cubic-bezier(.16, 1, .3, 1) both;
+  pointer-events: none;
 }
 
 .mg-hero__label {
   display: block;
-  margin-bottom: .5vw;
-  color: rgba(255, 255, 255, .78);
-  font-size: .5vw;
+  margin-bottom: .55vw;
+  color: rgba(255, 255, 255, .84);
+  font-size: .62vw;
   font-weight: 650;
   letter-spacing: .18em;
   text-transform: uppercase;
@@ -287,50 +883,298 @@ const youtubeUrl =
 .mg-hero__title {
   margin: 0;
   font-family: "Barlow Condensed", sans-serif;
-  font-size: 4.55vw;
+  font-size: 4.7vw;
   font-weight: 500;
-  line-height: .92;
+  line-height: .91;
   letter-spacing: -.025em;
   text-transform: uppercase;
-  text-shadow: 0 .25vw 1.4vw rgba(0, 0, 0, .2);
+  text-shadow:
+    0 .25vw 1.4vw rgba(0, 0, 0, .22);
 }
 
 .mg-hero__tagline {
-  margin: .55vw 0 0;
-  color: rgba(255, 255, 255, .92);
-  font-size: .94vw;
+  margin: .62vw 0 0;
+  color: rgba(255, 255, 255, .94);
+  font-size: 1.02vw;
   font-weight: 400;
-  text-shadow: 0 .2vw 1vw rgba(0, 0, 0, .28);
+  text-shadow:
+    0 .2vw 1vw rgba(0, 0, 0, .3);
 }
 
-@keyframes heroIntro {
+/* =========================================================
+   COPY TRANSITION
+========================================================= */
+
+.hero-copy-enter-active,
+.hero-copy-leave-active {
+  transition:
+    opacity .45s ease,
+    transform .65s cubic-bezier(.16, 1, .3, 1),
+    filter .45s ease;
+}
+
+.hero-copy-enter-from {
+  opacity: 0;
+  transform:
+    translateX(-50%)
+    translateY(1vw);
+  filter: blur(.25vw);
+}
+
+.hero-copy-leave-to {
+  opacity: 0;
+  transform:
+    translateX(-50%)
+    translateY(-.65vw);
+  filter: blur(.18vw);
+}
+
+/* =========================================================
+   SLIDER NAVIGATION
+========================================================= */
+
+.mg-hero__slider-nav {
+  position: absolute;
+  left: 0;
+  bottom: 2.65vw;
+  z-index: 60;
+
+  width: min(54vw, 980px);
+
+  display: grid;
+  grid-template-columns:
+    auto
+    minmax(0, 1fr)
+    auto;
+
+  align-items: center;
+  gap: 1.3vw;
+}
+
+/* COUNTER */
+
+.mg-hero__counter {
+  min-width: 3.4vw;
+  display: flex;
+  align-items: baseline;
+  gap: .27vw;
+  font-variant-numeric: tabular-nums;
+}
+
+.mg-hero__counter strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 1.2vw;
+  font-weight: 500;
+}
+
+.mg-hero__counter span,
+.mg-hero__counter small {
+  color: rgba(255, 255, 255, .5);
+  font-size: .48vw;
+  font-weight: 600;
+}
+
+/* TABS */
+
+.mg-hero__tabs {
+  min-width: 0;
+
+  display: grid;
+  grid-template-columns:
+    repeat(4, minmax(0, 1fr));
+
+  gap: .72vw;
+}
+
+.mg-hero__tab {
+  position: relative;
+  z-index: 65;
+
+  min-width: 0;
+  padding: .25vw 0 .2vw;
+
+  border: 0;
+
+  appearance: none;
+  -webkit-appearance: none;
+
+  background: transparent;
+  color: rgba(255, 255, 255, .52);
+
+  text-align: left;
+  font: inherit;
+
+  cursor: pointer;
+  pointer-events: auto;
+
+  transition: color .3s ease;
+}
+
+.mg-hero__tab:hover,
+.mg-hero__tab.is-active {
+  color: #fff;
+}
+
+.mg-hero__tab-line {
+  position: relative;
+
+  display: block;
+
+  width: 100%;
+  height: 1px;
+
+  overflow: hidden;
+
+  background:
+    rgba(255, 255, 255, .23);
+}
+
+.mg-hero__tab-line i {
+  position: absolute;
+  inset: 0;
+
+  display: block;
+
+  background: #fff;
+
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+.mg-hero__tab.is-active
+.mg-hero__tab-line i {
+  animation:
+    heroSlideProgress
+    10s
+    linear
+    forwards;
+}
+
+@keyframes heroSlideProgress {
   from {
-    opacity: 0;
-    transform: translateX(-50%) translateY(1.3vw);
+    transform: scaleX(0);
   }
 
   to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: scaleX(1);
   }
 }
 
-/* FEATURED MODEL CARD */
+.mg-hero__tab-copy {
+  display: block;
+
+  margin-top: .55vw;
+
+  overflow: hidden;
+
+  font-size: .56vw;
+  font-weight: 650;
+  letter-spacing: .07em;
+
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ARROWS */
+
+.mg-hero__arrows {
+  display: flex;
+  gap: .42vw;
+}
+
+.mg-hero__arrows button {
+  position: relative;
+  z-index: 70;
+
+  width: 2.5vw;
+  height: 2.5vw;
+
+  display: grid;
+  place-items: center;
+
+  padding: 0;
+
+  border:
+    1px solid
+    rgba(255, 255, 255, .22);
+
+  border-radius: 50%;
+
+  background:
+    rgba(8, 8, 8, .22);
+
+  color: #fff;
+
+  appearance: none;
+  -webkit-appearance: none;
+
+  backdrop-filter: blur(.55vw);
+  -webkit-backdrop-filter: blur(.55vw);
+
+  cursor: pointer;
+  pointer-events: auto;
+
+  transition:
+    background .3s ease,
+    border-color .3s ease,
+    transform .3s ease;
+}
+
+.mg-hero__arrows button:hover {
+  border-color:
+    rgba(255, 255, 255, .58);
+
+  background:
+    rgba(255, 255, 255, .13);
+
+  transform: scale(1.055);
+}
+
+.mg-hero__arrows button:active {
+  transform: scale(.96);
+}
+
+.mg-hero__arrows svg {
+  width: .9vw;
+}
+
+/* =========================================================
+   VEHICLE CARD
+========================================================= */
 
 .vehicle-card {
   position: absolute;
   right: 0;
   bottom: 2.5vw;
+  z-index: 55;
+
   width: 16.3vw;
   padding: .38vw;
-  border: 1px solid rgba(255, 255, 255, .12);
+
+  border:
+    1px solid
+    rgba(255, 255, 255, .12);
+
   border-radius: .88vw;
-  background: rgba(7, 7, 7, .58);
-  backdrop-filter: blur(1.1vw) saturate(1.08);
-  -webkit-backdrop-filter: blur(1.1vw) saturate(1.08);
-  box-shadow: 0 1.5vw 4vw rgba(0, 0, 0, .22);
-  animation: cardReveal 1s .2s cubic-bezier(.16, 1, .3, 1) both;
-  transition: transform .35s ease, background .35s ease;
+
+  background:
+    rgba(7, 7, 7, .58);
+
+  backdrop-filter:
+    blur(1.1vw)
+    saturate(1.08);
+
+  -webkit-backdrop-filter:
+    blur(1.1vw)
+    saturate(1.08);
+
+  box-shadow:
+    0 1.5vw 4vw rgba(0, 0, 0, .22);
+
+  transition:
+    transform .35s ease,
+    background .35s ease;
 }
 
 .vehicle-card:hover {
@@ -353,9 +1197,18 @@ const youtubeUrl =
 .vehicle-card__vehicle-bg {
   position: absolute;
   inset: 0;
+
   background:
-    radial-gradient(circle at 50% 82%, rgba(0, 0, 0, .15), transparent 32%),
-    linear-gradient(150deg, #f0f0ed, #d8dbdc);
+    radial-gradient(
+      circle at 50% 82%,
+      rgba(0, 0, 0, .15),
+      transparent 32%
+    ),
+    linear-gradient(
+      150deg,
+      #f0f0ed,
+      #d8dbdc
+    );
 }
 
 .vehicle-card__image img {
@@ -363,27 +1216,40 @@ const youtubeUrl =
   left: 50%;
   top: 48%;
   z-index: 2;
+
   width: 94%;
   height: 85%;
+
   object-fit: contain;
-  transform: translate(-50%, -50%) scale(1);
-  transition: transform .65s cubic-bezier(.16, 1, .3, 1);
+
+  transform:
+    translate(-50%, -50%)
+    scale(1);
+
+  transition:
+    transform .65s
+    cubic-bezier(.16, 1, .3, 1);
 }
 
-.vehicle-card:hover .vehicle-card__image img {
-  transform: translate(-50%, -52%) scale(1.045);
+.vehicle-card:hover
+.vehicle-card__image img {
+  transform:
+    translate(-50%, -52%)
+    scale(1.045);
 }
 
 .vehicle-card__image-shade {
   position: absolute;
   inset: 0;
   z-index: 3;
-  background: linear-gradient(
-    0deg,
-    rgba(0, 0, 0, .62) 0%,
-    rgba(0, 0, 0, .04) 42%,
-    transparent 67%
-  );
+
+  background:
+    linear-gradient(
+      0deg,
+      rgba(0, 0, 0, .62) 0%,
+      rgba(0, 0, 0, .04) 42%,
+      transparent 67%
+    );
 }
 
 .vehicle-card__meta {
@@ -396,8 +1262,8 @@ const youtubeUrl =
 .vehicle-card__meta span {
   display: block;
   margin-bottom: .16vw;
-  color: rgba(255, 255, 255, .6);
-  font-size: .31vw;
+  color: rgba(255, 255, 255, .62);
+  font-size: .34vw;
   font-weight: 700;
   letter-spacing: .14em;
   text-transform: uppercase;
@@ -406,7 +1272,7 @@ const youtubeUrl =
 .vehicle-card__meta strong {
   display: block;
   font-family: "Barlow Condensed", sans-serif;
-  font-size: 1.1vw;
+  font-size: 1.16vw;
   font-weight: 600;
   line-height: 1;
   text-transform: uppercase;
@@ -421,21 +1287,32 @@ const youtubeUrl =
 
 .vehicle-card__testdrive {
   flex: 1;
+
   height: 2.42vw;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   gap: .48vw;
   padding: 0 .7vw;
+
   border-radius: .55vw;
+
   background: #fff;
   color: #080808;
+
   text-decoration: none;
-  transition: background .3s ease, color .3s ease, transform .3s ease;
+
+  transition:
+    background .3s ease,
+    color .3s ease,
+    transform .3s ease;
 }
 
-.vehicle-card__testdrive > span:last-child {
-  font-size: .52vw;
+.vehicle-card__testdrive
+> span:last-child {
+  font-size: .56vw;
   font-weight: 750;
   letter-spacing: .11em;
   text-transform: uppercase;
@@ -461,16 +1338,28 @@ const youtubeUrl =
 
 .vehicle-card__arrow {
   flex: 0 0 2.42vw;
+
   width: 2.42vw;
   height: 2.42vw;
+
   display: grid;
   place-items: center;
-  border: 1px solid rgba(255, 255, 255, .16);
+
+  border:
+    1px solid
+    rgba(255, 255, 255, .16);
+
   border-radius: .55vw;
-  background: rgba(255, 255, 255, .07);
+
+  background:
+    rgba(255, 255, 255, .07);
+
   color: #fff;
   text-decoration: none;
-  transition: background .3s ease, transform .3s ease;
+
+  transition:
+    background .3s ease,
+    transform .3s ease;
 }
 
 .vehicle-card__arrow svg {
@@ -478,23 +1367,39 @@ const youtubeUrl =
 }
 
 .vehicle-card__arrow:hover {
-  background: rgba(255, 255, 255, .14);
+  background:
+    rgba(255, 255, 255, .14);
+
   transform: translateX(.1vw);
 }
 
-@keyframes cardReveal {
-  from {
-    opacity: 0;
-    transform: translateY(1.4vw);
-  }
+/* =========================================================
+   CARD SWAP
+========================================================= */
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.vehicle-card-swap-enter-active,
+.vehicle-card-swap-leave-active {
+  transition:
+    opacity .38s ease,
+    transform .55s cubic-bezier(.16, 1, .3, 1),
+    filter .38s ease;
 }
 
-/* TABLET */
+.vehicle-card-swap-enter-from {
+  opacity: 0;
+  transform: translateY(.85vw);
+  filter: blur(.15vw);
+}
+
+.vehicle-card-swap-leave-to {
+  opacity: 0;
+  transform: translateY(-.4vw);
+  filter: blur(.1vw);
+}
+
+/* =========================================================
+   TABLET
+========================================================= */
 
 @media (max-width: 1000px) {
   .mg-hero__container {
@@ -503,19 +1408,37 @@ const youtubeUrl =
 
   .mg-hero__intro {
     top: 9vw;
-    width: 55vw;
+    width: 58vw;
   }
 
   .mg-hero__label {
-    font-size: .65vw;
+    font-size: .78vw;
   }
 
   .mg-hero__title {
-    font-size: 5.5vw;
+    font-size: 5.7vw;
   }
 
   .mg-hero__tagline {
-    font-size: 1.2vw;
+    font-size: 1.3vw;
+  }
+
+  .mg-hero__slider-nav {
+    width: 62vw;
+    bottom: 3vw;
+  }
+
+  .mg-hero__tab-copy {
+    font-size: .72vw;
+  }
+
+  .mg-hero__arrows button {
+    width: 3.3vw;
+    height: 3.3vw;
+  }
+
+  .mg-hero__arrows svg {
+    width: 1.1vw;
   }
 
   .vehicle-card {
@@ -536,12 +1459,15 @@ const youtubeUrl =
     width: 3.2vw;
   }
 
-  .vehicle-card__testdrive > span:last-child {
-    font-size: .7vw;
+  .vehicle-card__testdrive
+  > span:last-child {
+    font-size: .72vw;
   }
 }
 
-/* MOBILE */
+/* =========================================================
+   MOBILE
+========================================================= */
 
 @media (max-width: 767px) {
   .mg-hero {
@@ -553,12 +1479,13 @@ const youtubeUrl =
   }
 
   .mg-hero__bottom-shade {
-    background: linear-gradient(
-      0deg,
-      rgba(0, 0, 0, .62) 0%,
-      rgba(0, 0, 0, .11) 44%,
-      transparent 66%
-    );
+    background:
+      linear-gradient(
+        0deg,
+        rgba(0, 0, 0, .72) 0%,
+        rgba(0, 0, 0, .22) 42%,
+        transparent 69%
+      );
   }
 
   .mg-hero__container {
@@ -572,7 +1499,7 @@ const youtubeUrl =
 
   .mg-hero__label {
     margin-bottom: 1.6vw;
-    font-size: 1.8vw;
+    font-size: 1.95vw;
   }
 
   .mg-hero__title {
@@ -581,13 +1508,70 @@ const youtubeUrl =
 
   .mg-hero__tagline {
     margin-top: 1.6vw;
-    font-size: 3.4vw;
+    font-size: 3.5vw;
+  }
+
+  .mg-hero__slider-nav {
+    left: 0;
+    bottom: 31vw;
+    width: 100%;
+
+    grid-template-columns:
+      auto
+      1fr
+      auto;
+
+    gap: 3vw;
+  }
+
+  .mg-hero__counter {
+    min-width: 9vw;
+    gap: .8vw;
+  }
+
+  .mg-hero__counter strong {
+    font-size: 4.1vw;
+  }
+
+  .mg-hero__counter span,
+  .mg-hero__counter small {
+    font-size: 1.8vw;
+  }
+
+  .mg-hero__tabs {
+    gap: 1.5vw;
+  }
+
+  .mg-hero__tab {
+    padding: 1.2vw 0;
+  }
+
+  .mg-hero__tab-copy {
+    display: none;
+  }
+
+  .mg-hero__arrows {
+    gap: 1.4vw;
+  }
+
+  .mg-hero__arrows button {
+    width: 9vw;
+    height: 9vw;
+
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+
+  .mg-hero__arrows svg {
+    width: 3.3vw;
   }
 
   .vehicle-card {
     right: 0;
     bottom: 18px;
+
     width: min(62vw, 245px);
+
     padding: 5px;
     border-radius: 13px;
   }
@@ -621,7 +1605,8 @@ const youtubeUrl =
     border-radius: 8px;
   }
 
-  .vehicle-card__testdrive > span:last-child {
+  .vehicle-card__testdrive
+  > span:last-child {
     font-size: 7px;
   }
 
@@ -640,6 +1625,20 @@ const youtubeUrl =
   .vehicle-card__arrow svg {
     width: 14px;
   }
+
+  .hero-copy-enter-from {
+    transform:
+      translateX(-50%)
+      translateY(4vw);
+
+    filter: blur(1vw);
+  }
+
+  .hero-copy-leave-to {
+    transform:
+      translateX(-50%)
+      translateY(-2vw);
+  }
 }
 
 @media (max-width: 420px) {
@@ -647,10 +1646,18 @@ const youtubeUrl =
     top: 20vw;
   }
 
+  .mg-hero__slider-nav {
+    bottom: 140px;
+  }
+
   .vehicle-card {
     width: 220px;
   }
 }
+
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
 
 @media (prefers-reduced-motion: reduce) {
   .mg-hero *,
